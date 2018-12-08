@@ -391,9 +391,9 @@ IF (MERGE_UNITTESTS)
   )
   # Fixes "C1128: number of sections exceeded object file format limit" in MSVC
   IF(WIN32)
-    ADD_COMPILE_FLAGS(
-      ${MERGE_LARGE_TESTS}
-      COMPILE_FLAGS "/bigobj")
+#    ADD_COMPILE_FLAGS(
+#      ${MERGE_LARGE_TESTS}
+#      COMPILE_FLAGS "/bigobj")
   ENDIF()
 
   INCLUDE_DIRECTORIES(${CMAKE_CURRENT_SOURCE_DIR})

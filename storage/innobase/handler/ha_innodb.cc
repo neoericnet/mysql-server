@@ -5818,6 +5818,108 @@ ha_innobase::innobase_initialize_autoinc()
 	dict_table_autoinc_initialize(m_prebuilt->table, auto_inc);
 }
 
+/************************************************************************
+Set the auto_pk_field column max value. This should only be called once from
+ha_innobase::open(). Therefore there's no need for a covering lock. */
+
+void
+ha_innobase::innobase_initialize_auto_pk_inc()
+/*======================================*/
+{
+	ulonglong	auto_pk_inc;
+	const Field*	field = table->found_auto_pk_row_field;
+
+	if (field != NULL) {
+    auto_pk_inc = field->get_max_int_value();
+
+		/* auto_pk_inc column cannot be virtual column */
+		ut_ad(!innobase_is_v_fld(field));
+	} else {
+		/* We have no idea what's been passed in to us as the
+		auto_pk_field column. We set it to the 0, effectively disabling
+		updates to the table. */
+    auto_pk_inc = 0;
+
+		ib::info() << "Unable to determine the AUTO_PK_INC column name";
+	}
+
+	if (srv_force_recovery >= SRV_FORCE_NO_IBUF_MERGE) {
+		/* If the recovery level is set so high that writes
+		are disabled we force the AUTO_PK_INC counter to 0
+		value effectively disabling writes to the table.
+		Secondly, we avoid reading the table in case the read
+		results in failure due to a corrupted table/index.
+
+		We will not return an error to the client, so that the
+		tables can be dumped with minimal hassle.  If an error
+		were returned in this case, the first attempt to read
+		the table would fail and subsequent SELECTs would succeed. */
+		auto_pk_inc = 0;
+	} else if (field == NULL) {
+		/* This is a far more serious error, best to avoid
+		opening the table and return failure. */
+		my_error(ER_AUTO_PK_INC_READ_FAILED, MYF(0));
+	} else {
+		dict_index_t*	index;
+		const char*	col_name;
+		ib_uint64_t	read_auto_pk_inc;
+		ulint		err;
+
+		update_thd(ha_thd());
+
+		col_name = field->field_name;
+
+		index = innobase_get_index(table->s->auto_pk_index);
+
+		/* Execute SELECT MAX(auto_pk_name) FROM TABLE; */
+		err = row_search_max_auto_pk_inc(index, col_name, &read_auto_pk_inc);
+
+		switch (err) {
+			case DB_SUCCESS: {
+				ulonglong	col_max_value;
+
+				col_max_value = field->get_max_int_value();
+
+				/* At the this stage we do not know the increment
+        nor the offset, so use a default increment of 1. */
+
+				auto_pk_inc = innobase_next_autoinc(
+                read_auto_pk_inc, 1, 1, 0, col_max_value);
+
+				break;
+			}
+			case DB_RECORD_NOT_FOUND:
+				ib::error() << "MySQL and InnoDB data dictionaries are"
+											 " out of sync. Unable to find the AUTO_PK_INC"
+											 " column " << col_name << " in the InnoDB"
+																								 " table " << index->table->name << ". We set"
+																																										" the next AUTO_PK_INC column value to 0, in"
+																																										" effect disabling the AUTO_PK_INC next value"
+																																										" generation.";
+
+				ib::info() << "You can either set the next AUTO_PK_INC"
+											" value explicitly using ALTER TABLE or fix"
+											" the data dictionary by recreating the"
+											" table.";
+
+				/* This will disable the AUTO_PK_INC generation. */
+        auto_pk_inc = 0;
+
+				/* We want the open to succeed, so that the user can
+        take corrective action. ie. reads should succeed but
+        updates should fail. */
+				err = DB_SUCCESS;
+				break;
+			default:
+				/* row_search_max_auto_pk_inc() should only return
+        one of DB_SUCCESS or DB_RECORD_NOT_FOUND. */
+				ut_error;
+		}
+	}
+
+	dict_table_auto_pk_inc_initialize(m_prebuilt->table, auto_pk_inc);
+}
+
 /*****************************************************************//**
 Creates and opens a handle to a table which already exists in an InnoDB
 database.
@@ -6177,6 +6279,24 @@ ha_innobase::open(
 
 		dict_table_autoinc_unlock(m_prebuilt->table);
 	}
+
+  /* Only if the table has an AUTO_PK. */
+  if (m_prebuilt->table != NULL
+      && !m_prebuilt->table->ibd_file_missing
+      && table->auto_pk_row_field) {
+    dict_table_auto_pk_inc_lock(m_prebuilt->table);
+
+    /* Since a table can already be "open" in InnoDB's internal
+    data dictionary, we only init the autoinc counter once, the
+    first time the table is loaded. We can safely reuse the
+    autoinc value from a previous MySQL open. */
+    if (dict_table_autoinc_read(m_prebuilt->table) == 0) {
+
+      innobase_initialize_auto_pk_inc();
+    }
+
+    dict_table_autoinc_unlock(m_prebuilt->table);
+  }
 
 	/* Set plugin parser for fulltext index */
 	for (uint i = 0; i < table->s->keys; i++) {

@@ -6610,3 +6610,109 @@ row_search_max_autoinc(
 
 	return(error);
 }
+
+
+/*******************************************************************//**
+Read the max AUTO_PK_INC value from an index.
+@return DB_SUCCESS if all OK else error code, DB_RECORD_NOT_FOUND if
+column name can't be found in index */
+dberr_t
+row_search_max_auto_pk_inc(
+/*===================*/
+				dict_index_t*	index,		/*!< in: index to search */
+				const char*	col_name,	/*!< in: name of autoinc column */
+				ib_uint64_t*	value)		/*!< out: AUTO_PK_INC value read */
+{
+	dict_field_t*	dfield = dict_index_get_nth_field(index, 0);
+	dberr_t		error = DB_SUCCESS;
+	*value = 0;
+
+	if (strcmp(col_name, dfield->name) != 0) {
+		error = DB_RECORD_NOT_FOUND;
+	} else {
+		mtr_t		mtr;
+		const rec_t*	rec;
+
+		mtr_start(&mtr);
+
+		rec = row_search_get_max_rec(index, &mtr);
+
+		if (rec != NULL) {
+			ibool unsigned_type = (
+							dfield->col->prtype & DATA_UNSIGNED);
+
+			*value = row_search_autopk_inc_read_column(
+							index, rec, 0,
+							dfield->col->mtype, unsigned_type);
+		}
+
+		mtr_commit(&mtr);
+	}
+
+	return(error);
+}
+
+/*******************************************************************//**
+Read the AUTO_PK_INC column from the current row. If the value is less than
+0 and the type is not unsigned then we reset the value to 0.
+@return value read from the column */
+static
+ib_uint64_t
+row_search_autopk_inc_read_column(
+/*===========================*/
+				dict_index_t*	index,		/*!< in: index to read from */
+				const rec_t*	rec,		/*!< in: current rec */
+				ulint		col_no,		/*!< in: column number */
+				ulint		mtype,		/*!< in: column main type */
+				ibool		unsigned_type)	/*!< in: signed or unsigned flag */
+{
+	ulint		len;
+	const byte*	data;
+	ib_uint64_t	value;
+	mem_heap_t*	heap = NULL;
+	ulint		offsets_[REC_OFFS_NORMAL_SIZE];
+	ulint*		offsets	= offsets_;
+
+	rec_offs_init(offsets_);
+
+	offsets = rec_get_offsets(rec, index, offsets, col_no + 1, &heap);
+
+	if (rec_offs_nth_sql_null(offsets, col_no)) {
+		/* There is no non-NULL value in the auto-increment column. */
+		value = 0;
+		goto func_exit;
+	}
+
+	data = rec_get_nth_field(rec, offsets, col_no, &len);
+
+	switch (mtype) {
+		case DATA_INT:
+			ut_a(len <= sizeof value);
+			value = mach_read_int_type(data, len, unsigned_type);
+			break;
+
+		case DATA_FLOAT:
+			ut_a(len == sizeof(float));
+			value = (ib_uint64_t) mach_float_read(data);
+			break;
+
+		case DATA_DOUBLE:
+			ut_a(len == sizeof(double));
+			value = (ib_uint64_t) mach_double_read(data);
+			break;
+
+		default:
+			ut_error;
+	}
+
+	if (!unsigned_type && static_cast<int64_t>(value) < 0) {
+		value = 0;
+	}
+
+	func_exit:
+	if (UNIV_LIKELY_NULL(heap)) {
+		mem_heap_free(heap);
+	}
+
+	return(value);
+}

@@ -277,6 +277,31 @@ row_search_max_autoinc(
 	ib_uint64_t*	value)		/*!< out: AUTOINC value read */
 	MY_ATTRIBUTE((nonnull, warn_unused_result));
 
+/*******************************************************************//**
+Read the max AUTO_PK_INC value from an index.
+@return DB_SUCCESS if all OK else error code */
+dberr_t
+row_search_max_auto_pk_inc(
+/*===================*/
+				dict_index_t*	index,		/*!< in: index to search */
+				const char*	col_name,	/*!< in: autoinc column name */
+				ib_uint64_t*	value)		/*!< out: AUTO_PK_INC value read */
+MY_ATTRIBUTE((nonnull, warn_unused_result));
+
+/*******************************************************************//**
+Read the AUTO_PK_INC column from the current row. If the value is less than
+0 and the type is not unsigned then we reset the value to 0.
+@return value read from the column */
+static
+ib_uint64_t
+row_search_autopk_inc_read_column(
+/*===========================*/
+        dict_index_t*	index,		/*!< in: index to read from */
+        const rec_t*	rec,		/*!< in: current rec */
+        ulint		col_no,		/*!< in: column number */
+        ulint		mtype,		/*!< in: column main type */
+        ibool		unsigned_type);	/*!< in: signed or unsigned flag */
+
 /** A structure for caching column values for prefetched rows */
 struct sel_buf_t{
 	byte*		data;	/*!< data, or NULL; if not NULL, this field

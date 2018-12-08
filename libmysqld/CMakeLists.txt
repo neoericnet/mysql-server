@@ -141,7 +141,7 @@ IF(WIN32 AND CMAKE_SIZEOF_VOID_P MATCHES 8)
     
      STRING(FIND ${${flag}} "/MD" POS)
      IF(NOT (${POS} MATCHES "-1"))
-       ADD_COMPILE_FLAGS(../sql/item_geofunc_setops.cc COMPILE_FLAGS "/bigobj")
+#       ADD_COMPILE_FLAGS(../sql/item_geofunc_setops.cc COMPILE_FLAGS "/bigobj")
        BREAK()
      ENDIF()  
   ENDFOREACH()

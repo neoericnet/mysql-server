@@ -665,6 +665,7 @@ struct TABLE_SHARE
   uint next_number_index;               /* autoincrement key number */
   uint next_number_key_offset;          /* autoinc keypart offset in a key */
   uint next_number_keypart;             /* autoinc keypart number in a key */
+  uint auto_pk_index;                     /* auto_pk_key index*/
   uint error, open_errno, errarg;       /* error from open_table_def() */
   uint column_bitmap_size;
   uchar frm_version;
@@ -1060,6 +1061,9 @@ public:
   Field **vfield;                       /* Pointer to generated fields*/
   Field *hash_field;                    /* Field used by unique constraint */
   Field *fts_doc_id_field;              /* Set if FTS_DOC_ID field is present */
+
+  Field *auto_pk_row_field;		/* Set if theie is auto_pk */
+  Field *found_auto_pk_row_field;	/* Set on open */
 
   /* Table's triggers, 0 if there are no of them */
   Table_trigger_dispatcher *triggers;

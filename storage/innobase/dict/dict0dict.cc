@@ -811,31 +811,6 @@ dict_table_autoinc_initialize(
 	table->autoinc = value;
 }
 
-/** Get all the FTS indexes on a table.
-@param[in]	table	table
-@param[out]	indexes	all FTS indexes on this table
-@return number of FTS indexes */
-ulint
-dict_table_get_all_fts_indexes(
-	const dict_table_t*	table,
-	ib_vector_t*		indexes)
-{
-	dict_index_t* index;
-
-	ut_a(ib_vector_size(indexes) == 0);
-
-	for (index = dict_table_get_first_index(table);
-	     index;
-	     index = dict_table_get_next_index(index)) {
-
-		if (index->type == DICT_FTS) {
-			ib_vector_push(indexes, &index);
-		}
-	}
-
-	return(ib_vector_size(indexes));
-}
-
 /** Store autoinc value when the table is evicted.
 @param[in]	table	table evicted */
 void
@@ -962,6 +937,92 @@ dict_index_get_nth_col_or_prefix_pos(
 	}
 
 	return(ULINT_UNDEFINED);
+}
+
+/**
+ * auto pk
+ */
+/********************************************************************//**
+Acquire the auto_pk_inc lock. */
+void
+dict_table_auto_pk_inc_lock(
+/*====================*/
+				dict_table_t*	table)	/*!< in/out: table */
+{
+	os_once::do_or_wait_for_done(
+					&table->auto_pk_inc_mutex_created,
+					dict_table_auto_pk_inc_alloc, table);
+
+	mutex_enter(table->auto_pk_inc_mutex);
+}
+
+#ifndef UNIV_HOTBACKUP
+/** Allocate and init the auto_pk_inc latch of a given table.
+This function must not be called concurrently on the same table object.
+@param[in,out]	table_void	table whose autoinc latch to create */
+static
+void
+dict_table_auto_pk_inc_alloc(
+				void*	table_void)
+{
+	dict_table_t*	table = static_cast<dict_table_t*>(table_void);
+	table->auto_pk_inc_mutex = UT_NEW_NOKEY(ib_mutex_t());
+	ut_a(table->auto_pk_inc_mutex != NULL);
+	mutex_create(LATCH_ID_AUTO_PK_INC, table->auto_pk_inc_mutex);
+}
+
+/********************************************************************//**
+Unconditionally set the auto_pk_inc counter. */
+void
+dict_table_auto_pk_inc_initialize(
+/*==========================*/
+        dict_table_t*	table,	/*!< in/out: table */
+        ib_uint64_t	value)	/*!< in: next value to assign to a row */
+{
+  ut_ad(dict_table_auto_pk_inc_own(table));
+
+  table->auto_pk_inc = value;
+}
+
+
+
+/** Get all the FTS indexes on a table.
+@param[in]	table	table
+@param[out]	indexes	all FTS indexes on this table
+@return number of FTS indexes */
+ulint
+dict_table_get_all_fts_indexes(
+        const dict_table_t*	table,
+        ib_vector_t*		indexes)
+{
+  dict_index_t* index;
+
+  ut_a(ib_vector_size(indexes) == 0);
+
+  for (index = dict_table_get_first_index(table);
+       index;
+       index = dict_table_get_next_index(index)) {
+
+    if (index->type == DICT_FTS) {
+      ib_vector_push(indexes, &index);
+    }
+  }
+
+  return(ib_vector_size(indexes));
+}
+
+/********************************************************************//**
+Reads the next auto_pk_inc value (== auto_pk_inc counter value), 0 if not yet
+initialized.
+@return value for a new row, or 0 */
+ib_uint64_t
+dict_table_auto_pk_inc_read(
+/*====================*/
+        const dict_table_t*	table)	/*!< in: table */
+{
+  ut_ad(dict_table_auto_pk_inc_own(table));
+
+  return(table->auto_pk_inc);
 }
 
 #ifndef UNIV_HOTBACKUP

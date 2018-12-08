@@ -433,6 +433,8 @@ private:
 
 	void innobase_initialize_autoinc();
 
+	void innobase_initialize_auto_pk_inc();
+
 	/** Resets a query execution 'template'.
 	@see build_template() */
 	void reset_template();

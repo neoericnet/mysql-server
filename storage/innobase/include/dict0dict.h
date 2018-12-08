@@ -353,6 +353,42 @@ dict_table_autoinc_unlock(
 	dict_table_t*	table);	/*!< in/out: table */
 
 #endif /* !UNIV_HOTBACKUP */
+
+/**
+ * auto pk
+ */
+/********************************************************************//**
+Acquire the auto_pk_inc lock. */
+void
+dict_table_auto_pk_inc_lock(
+/*====================*/
+        dict_table_t*	table);	/*!< in/out: table */
+
+/********************************************************************//**
+Unconditionally set the auto_pk_inc counter. */
+void
+dict_table_auto_pk_inc_initialize(
+/*==========================*/
+				dict_table_t*	table,	/*!< in/out: table */
+				ib_uint64_t	value);	/*!< in: next value to assign to a row */
+
+/********************************************************************//**
+Reads the next auto_pk_inc value (== auto_pk_inc counter value), 0 if not yet
+initialized.
+@return value for a new row, or 0 */
+ib_uint64_t
+dict_table_auto_pk_inc_read(
+/*====================*/
+        const dict_table_t*	table)	/*!< in: table */
+MY_ATTRIBUTE((warn_unused_result));
+
+/********************************************************************//**
+Release the auto_pk_inc lock. */
+void
+dict_table_auto_pk_inc_unlock(
+/*======================*/
+        dict_table_t*	table);	/*!< in/out: table */
+
 /**********************************************************************//**
 Adds system columns to a table object. */
 void

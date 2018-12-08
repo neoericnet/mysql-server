@@ -644,7 +644,7 @@ ENDIF()
 IF(WITH_UNIT_TESTS)
   # Visual Studio 11 needs this extra flag in order to compile gmock.
   IF(WIN32)
-    ADD_DEFINITIONS( /D _VARIADIC_MAX=10 )
+    ADD_DEFINITIONS(-D_VARIADIC_MAX=10 )
   ENDIF()
   # libc++ doesn't have tuple in tr1
   IF(HAVE_LLVM_LIBCPP)

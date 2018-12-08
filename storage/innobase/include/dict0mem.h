@@ -1655,6 +1655,15 @@ struct dict_table_t {
 	table. Protected by lock_sys->mutex. */
 	const trx_t*				autoinc_trx;
 
+  /** Creation state of auto_pk_inc_mutex member */
+  volatile os_once::state_t		auto_pk_inc_mutex_created;
+
+  /** Mutex protecting the auto_pk_increment counter. */
+  ib_mutex_t*				auto_pk_inc_mutex;
+
+	/** Auto_pk_inc counter value to give to the next inserted row. */
+	ib_uint64_t				auto_pk_inc;
+
 	/* @} */
 
 	/** Count of how many handles are opened to this table from memcached.
@@ -1820,6 +1829,19 @@ dict_table_autoinc_own(
 	const dict_table_t*	table)
 {
 	return(mutex_own(table->autoinc_mutex));
+}
+#endif /* UNIV_DEBUG */
+
+#ifdef UNIV_DEBUG
+/** Check if the current thread owns the auto_pk_inc_mutex of a given table.
+@param[in]	table	the auto_pk_inc_mutex belongs to this table
+@return true, if the current thread owns the auto_pk_inc_mutex, false otherwise.*/
+inline
+bool
+dict_table_auto_pk_inc_own(
+        const dict_table_t*	table)
+{
+  return(mutex_own(table->auto_pk_inc_mutex));
 }
 #endif /* UNIV_DEBUG */
 

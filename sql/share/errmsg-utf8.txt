@@ -7768,6 +7768,9 @@ ER_AUDIT_LOG_HOST_NAME_INVALID_CHARACTER
 WARN_DEPRECATED_MAXDB_SQL_MODE_FOR_TIMESTAMP
   eng "With the MAXDB SQL mode enabled, TIMESTAMP is identical with DATETIME. The MAXDB SQL mode is deprecated and will be removed in a future release. Please disable the MAXDB SQL mode and use DATETIME instead."
 
+ER_AUTO_PK_INC_READ_FAILED
+        eng "Failed to read auto primary key value from storage engine"
+
 #
 #  End of 5.7 error messages.
 #
