@@ -984,7 +984,29 @@ dict_table_auto_pk_inc_initialize(
   table->auto_pk_inc = value;
 }
 
+/********************************************************************//**
+Reads the next auto_pk_inc value (== auto_pk_inc counter value), 0 if not yet
+initialized.
+@return value for a new row, or 0 */
+ib_uint64_t
+dict_table_auto_pk_inc_read(
+/*====================*/
+        const dict_table_t*	table)	/*!< in: table */
+{
+  ut_ad(dict_table_auto_pk_inc_own(table));
 
+  return(table->auto_pk_inc);
+}
+
+/********************************************************************//**
+Release the auto_pk_inc lock. */
+void
+dict_table_auto_pk_inc_unlock(
+/*======================*/
+				dict_table_t*	table)	/*!< in/out: table */
+{
+	mutex_exit(table->auto_pk_inc_mutex);
+}
 
 /** Get all the FTS indexes on a table.
 @param[in]	table	table
@@ -1009,20 +1031,6 @@ dict_table_get_all_fts_indexes(
   }
 
   return(ib_vector_size(indexes));
-}
-
-/********************************************************************//**
-Reads the next auto_pk_inc value (== auto_pk_inc counter value), 0 if not yet
-initialized.
-@return value for a new row, or 0 */
-ib_uint64_t
-dict_table_auto_pk_inc_read(
-/*====================*/
-        const dict_table_t*	table)	/*!< in: table */
-{
-  ut_ad(dict_table_auto_pk_inc_own(table));
-
-  return(table->auto_pk_inc);
 }
 
 #ifndef UNIV_HOTBACKUP

@@ -6290,12 +6290,11 @@ ha_innobase::open(
     data dictionary, we only init the autoinc counter once, the
     first time the table is loaded. We can safely reuse the
     autoinc value from a previous MySQL open. */
-    if (dict_table_autoinc_read(m_prebuilt->table) == 0) {
-
+    if (dict_table_auto_pk_inc_read(m_prebuilt->table) == 0) {
       innobase_initialize_auto_pk_inc();
     }
 
-    dict_table_autoinc_unlock(m_prebuilt->table);
+		dict_table_auto_pk_inc_unlock(m_prebuilt->table);
   }
 
 	/* Set plugin parser for fulltext index */
