@@ -381,7 +381,15 @@ dict_table_auto_pk_inc_read(
 /*====================*/
         const dict_table_t*	table)	/*!< in: table */
 MY_ATTRIBUTE((warn_unused_result));
+/********************************************************************//**
+Updates the auto_pk_inc counter if the value supplied is greater than the
+current value. */
+void
+dict_table_auto_pk_inc_update_if_greater(
+/*=================================*/
 
+				dict_table_t*	table,	/*!< in/out: table */
+				ib_uint64_t	value);	/*!< in: value which was assigned to a row */
 /********************************************************************//**
 Release the auto_pk_inc lock. */
 void

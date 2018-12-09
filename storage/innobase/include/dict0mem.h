@@ -1655,6 +1655,9 @@ struct dict_table_t {
 	table. Protected by lock_sys->mutex. */
 	const trx_t*				autoinc_trx;
 
+	/**
+	 * auto_pk
+	 */
   /** Creation state of auto_pk_inc_mutex member */
   volatile os_once::state_t		auto_pk_inc_mutex_created;
 
@@ -1663,6 +1666,10 @@ struct dict_table_t {
 
 	/** Auto_pk_inc counter value to give to the next inserted row. */
 	ib_uint64_t				auto_pk_inc;
+	/** The transaction that currently holds the the AUTOINC lock on this
+   table. Protected by lock_sys->mutex. */
+	const trx_t*				auto_pk_inc_trx;
+
 
 	/* @} */
 

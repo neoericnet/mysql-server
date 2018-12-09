@@ -228,6 +228,23 @@ row_lock_table_autoinc_for_mysql(
 					table handle */
 	MY_ATTRIBUTE((warn_unused_result));
 
+/**
+ * auto_pk
+ */
+/*********************************************************************//**
+Sets an AUTO_PK_INC type lock on the table mentioned in prebuilt. The
+AUTO_PK_INC lock gives exclusive access to the auto-pk-inc counter of the
+table. The lock is reserved only for the duration of an SQL statement.
+It is not compatible with another AUTO_PK_INC or exclusive lock on the
+table.
+@return error code or DB_SUCCESS */
+dberr_t
+row_lock_table_auto_pk_inc_for_mysql(
+/*=============================*/
+        row_prebuilt_t*	prebuilt)	/*!< in: prebuilt struct in the MySQL
+					table handle */
+MY_ATTRIBUTE((warn_unused_result));
+
 /*********************************************************************//**
 Sets a table lock on the table mentioned in prebuilt.
 @return error code or DB_SUCCESS */
@@ -878,6 +895,17 @@ struct row_prebuilt_t {
 	dberr_t		autoinc_error;	/*!< The actual error code encountered
 					while trying to init or read the
 					autoinc value from the table. We
+					store it here so that we can return
+					it to MySQL */
+	/*----------------------*/
+	/**
+	 * auto_pk
+	 */
+  ulonglong	auto_pk_inc_last_value;
+            /*!< last value of AUTO-PK-INC interval */
+	dberr_t		auto_pk_inc_error;	/*!< The actual error code encountered
+					while trying to init or read the
+					auto_pk_inc value from the table. We
 					store it here so that we can return
 					it to MySQL */
 	/*----------------------*/

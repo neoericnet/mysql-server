@@ -44,7 +44,9 @@ enum lock_mode {
 			in an exclusive mode */
 	LOCK_NONE,	/* this is used elsewhere to note consistent read */
 	LOCK_NUM = LOCK_NONE, /* number of lock modes */
-	LOCK_NONE_UNSET = 255
+	LOCK_NONE_UNSET = 255,
+	LOCK_AUTO_PK_INC	/* locks the auto-pk-inc counter of a table
+			in an exclusive mode */
 };
 
 /** Convert the given enum value into string.

@@ -2531,6 +2531,28 @@ public:
   */
   bool is_operating_substatement_implicitly;
 
+  /**
+   * auto_pk
+   */
+  /*
+    List of auto_pk_increment intervals reserved by the thread so far, for
+    storage in the statement-based binlog.
+    Note that its minimum is not first_successful_insert_id_in_cur_stmt:
+    assuming a table with an autoinc column, and this happens:
+    INSERT INTO ... VALUES(3);
+    SET INSERT_ID=3; INSERT IGNORE ... VALUES (NULL);
+    then the latter INSERT will insert no rows
+    (first_successful_insert_id_in_cur_stmt == 0), but storing "INSERT_ID=3"
+    in the binlog is still needed; the list's minimum will contain 3.
+    This variable is cumulative: if several statements are written to binlog
+    as one (stored functions or triggers are used) this list is the
+    concatenation of all intervals reserved by all statements.
+  */
+  Discrete_intervals_list auto_pk_inc_intervals_in_cur_stmt_for_binlog;
+  /* Used by replication and SET INSERT_ID */
+  Discrete_intervals_list auto_pk_inc_intervals_forced;
+
+
 private:
   /**
     Stores the result of ROW_COUNT() function.

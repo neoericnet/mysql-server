@@ -1299,6 +1299,83 @@ run_again:
 	return(err);
 }
 
+/**
+ * auto_pk
+ */
+/*********************************************************************//**
+Sets an AUTO_PK_INC type lock on the table mentioned in prebuilt. The
+AUTO_PK_INC lock gives exclusive access to the auto-inc counter of the
+table. The lock is reserved only for the duration of an SQL statement.
+It is not compatible with another AUTO_PK_INC or exclusive lock on the
+table.
+@return error code or DB_SUCCESS */
+dberr_t
+row_lock_table_auto_pk_inc_for_mysql(
+/*=============================*/
+				row_prebuilt_t*	prebuilt)	/*!< in: prebuilt struct in the MySQL
+					table handle */
+{
+	trx_t*			trx	= prebuilt->trx;
+	ins_node_t*		node	= prebuilt->ins_node;
+	const dict_table_t*	table	= prebuilt->table;
+	que_thr_t*		thr;
+	dberr_t			err;
+	ibool			was_lock_wait;
+
+	/* If we already hold an AUTO_PK_INC lock on the table then do nothing.
+	Note: We peek at the value of the current owner without acquiring
+	the lock mutex. */
+	if (trx == table->auto_pk_inc_trx) {
+
+		return(DB_SUCCESS);
+	}
+
+	trx->op_info = "setting auto-inc lock";
+
+	row_get_prebuilt_insert_row(prebuilt);
+	node = prebuilt->ins_node;
+
+	/* We use the insert query graph as the dummy graph needed
+	in the lock module call */
+
+	thr = que_fork_get_first_thr(prebuilt->ins_graph);
+
+	que_thr_move_to_run_state_for_mysql(thr, trx);
+
+	run_again:
+	thr->run_node = node;
+	thr->prev_node = node;
+
+	/* It may be that the current session has not yet started
+	its transaction, or it has been committed: */
+
+	trx_start_if_not_started_xa(trx, true);
+
+	err = lock_table(0, prebuilt->table, LOCK_AUTO_PK_INC, thr);
+
+	trx->error_state = err;
+
+	if (err != DB_SUCCESS) {
+		que_thr_stop_for_mysql(thr);
+
+		was_lock_wait = row_mysql_handle_errors(&err, trx, thr, NULL);
+
+		if (was_lock_wait) {
+			goto run_again;
+		}
+
+		trx->op_info = "";
+
+		return(err);
+	}
+
+	que_thr_stop_for_mysql_no_error(thr, trx);
+
+	trx->op_info = "";
+
+	return(err);
+}
+
 /*********************************************************************//**
 Sets a table lock on the table mentioned in prebuilt.
 @return error code or DB_SUCCESS */

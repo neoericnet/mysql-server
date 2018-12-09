@@ -7515,6 +7515,106 @@ ha_innobase::intrinsic_table_write_row(uchar* record)
 		err, m_prebuilt->table->flags, m_user_thd));
 }
 
+/**
+ * auto_pk
+ */
+/********************************************************************//**
+This special handling is really to overcome the limitations of MySQL's
+binlogging. We need to eliminate the non-determinism that will arise in
+INSERT ... SELECT type of statements, since MySQL binlog only stores the
+min value of the autoinc interval. Once that is fixed we can get rid of
+the special lock handling.
+@return DB_SUCCESS if all OK else error code */
+
+dberr_t
+ha_innobase::innobase_lock_auto_pk_inc(void)
+/*====================================*/
+{
+	DBUG_ENTER("ha_innobase::innobase_lock_autoinc");
+	dberr_t		error = DB_SUCCESS;
+	long		lock_mode = innobase_autoinc_lock_mode;
+
+	ut_ad(!srv_read_only_mode
+				|| dict_table_is_intrinsic(m_prebuilt->table));
+
+	if (dict_table_is_intrinsic(m_prebuilt->table)) {
+		/* Intrinsic table are not shared accorss connection
+		so there is no need to AUTOINC lock the table. */
+		lock_mode = AUTOINC_NO_LOCKING;
+	}
+
+	switch (lock_mode) {
+		case AUTOINC_NO_LOCKING:
+			/* Acquire only the AUTO_PK_INC mutex. */
+			dict_table_auto_pk_inc_lock(m_prebuilt->table);
+			break;
+
+		case AUTOINC_NEW_STYLE_LOCKING:
+			/* For simple (single/multi) row INSERTs, we fallback to the
+      old style only if another transaction has already acquired
+      the AUTOINC lock on behalf of a LOAD FILE or INSERT ... SELECT
+      etc. type of statement. */
+			if (thd_sql_command(m_user_thd) == SQLCOM_INSERT
+					|| thd_sql_command(m_user_thd) == SQLCOM_REPLACE) {
+
+				dict_table_t*	ib_table = m_prebuilt->table;
+
+				/* Acquire the AUTO_PK_INC mutex. */
+				dict_table_auto_pk_inc_lock(ib_table);
+
+				/* We need to check that another transaction isn't
+        already holding the AUTOINC lock on the table. */
+				if (ib_table->n_waiting_or_granted_auto_inc_locks) {
+					/* Release the mutex to avoid deadlocks. */
+					dict_table_auto_pk_inc_unlock(ib_table);
+				} else {
+					break;
+				}
+			}
+			/* Fall through to old style locking. */
+
+		case AUTOINC_OLD_STYLE_LOCKING:
+			DBUG_EXECUTE_IF("die_if_autoinc_old_lock_style_used",
+											ut_ad(0););
+			error = row_lock_table_auto_pk_inc_for_mysql(m_prebuilt);
+
+			if (error == DB_SUCCESS) {
+
+				/* Acquire the AUTO_PK_INC mutex. */
+				dict_table_auto_pk_inc_lock(m_prebuilt->table);
+			}
+			break;
+
+		default:
+			ut_error;
+	}
+
+	DBUG_RETURN(error);
+}
+/********************************************************************//**
+Store the auto_pk_inc value in the table. The auto_pk_inc value is only set if
+it's greater than the existing auto_pk_inc value in the table.
+@return DB_SUCCESS if all went well else error code */
+
+dberr_t
+ha_innobase::innobase_set_max_auto_pk_inc(
+/*==================================*/
+				ulonglong	auto_pk_inc)	/*!< in: value to store */
+{
+	dberr_t		error;
+
+	error = innobase_lock_auto_pk_inc();
+
+	if (error == DB_SUCCESS) {
+
+    dict_table_auto_pk_inc_update_if_greater(m_prebuilt->table, auto_pk_inc);
+
+		dict_table_auto_pk_inc_unlock(m_prebuilt->table);
+	}
+
+	return(error);
+}
+
 /********************************************************************//**
 Stores a row in an InnoDB database, to the table specified in this
 handle.
@@ -7529,6 +7629,7 @@ ha_innobase::write_row(
 	ulint		sql_command;
 	int		error_result = 0;
 	bool		auto_inc_used = false;
+	bool		auto_pk_inc_used = false;
 
 	DBUG_ENTER("ha_innobase::write_row");
 
@@ -7668,6 +7769,35 @@ no_commit:
 		auto_inc_used = true;
 	}
 
+	/* Step-3.1: Handling of Auto Primay Key Increment Columns. */
+	if (table->auto_pk_row_field && record == table->record[0]) {
+
+		/* Reset the error code before calling
+		innobase_get_auto_increment(). */
+		m_prebuilt->auto_pk_inc_error = DB_SUCCESS;
+
+		if ((error_result = update_auto_pk_increment())) {
+			/* We don't want to mask auto_pk_inc overflow errors. */
+
+			/* Handle the case where the AUTO_PK_INC sub-system
+			failed during initialization. */
+			if (m_prebuilt->auto_pk_inc_error == DB_UNSUPPORTED) {
+				error_result = ER_AUTO_PK_INC_READ_FAILED;
+				/* Set the error message to report too. */
+				my_error(ER_AUTO_PK_INC_READ_FAILED, MYF(0));
+				goto func_exit;
+			} else if (m_prebuilt->auto_pk_inc_error != DB_SUCCESS) {
+				error = m_prebuilt->auto_pk_inc_error;
+				goto report_error;
+			}
+
+			/* MySQL errors are passed straight back. */
+			goto func_exit;
+		}
+
+		auto_pk_inc_used = true;
+	}
+
 	/* Step-4: Prepare INSERT graph that will be executed for actual INSERT
 	(This is a one time operation) */
 	if (m_prebuilt->mysql_template == NULL
@@ -7772,6 +7902,93 @@ set_max_autoinc:
 			break;
 		}
 	}
+
+  /* Step-6.1: Handling of errors related to auto-pk-increment. */
+  if (auto_pk_inc_used) {
+    ulonglong	auto_pk_inc;
+    ulonglong	auto_pk_max_value;
+
+    /* Note the number of rows processed for this statement, used
+    by get_auto_pk_increment() to determine the number of AUTO-PK-INC
+    values to reserve. This is only useful for a mult-value INSERT
+    and is a statement level counter. */
+    if (trx->n_auto_pk_inc_rows > 0) {
+      --trx->n_auto_pk_inc_rows;
+    }
+
+    /* We need the upper limit of the col type to check for
+    whether we update the table autoinc counter or not. */
+		auto_pk_max_value =
+            table->auto_pk_row_field->get_max_int_value();
+
+    /* Get the value that MySQL attempted to store in the table. */
+		auto_pk_inc = table->auto_pk_row_field->val_int();
+
+    switch (error) {
+      case DB_DUPLICATE_KEY:
+
+        /* A REPLACE command and LOAD DATA INFILE REPLACE
+        handle a duplicate key error themselves, but we
+        must update the autoinc counter if we are performing
+        those statements. */
+
+        switch (sql_command) {
+          case SQLCOM_LOAD:
+            if (trx->duplicates) {
+
+              goto set_max_auto_pk_inc;
+            }
+            break;
+
+          case SQLCOM_REPLACE:
+          case SQLCOM_INSERT_SELECT:
+          case SQLCOM_REPLACE_SELECT:
+            goto set_max_auto_pk_inc;
+
+          default:
+            break;
+        }
+
+        break;
+
+      case DB_SUCCESS:
+        /* If the actual value inserted is greater than
+        the upper limit of the interval, then we try and
+        update the table upper limit. Note: last_value
+        will be 0 if get_auto_increment() was not called. */
+
+        if (auto_pk_inc >= m_prebuilt->auto_pk_inc_last_value) {
+          set_max_auto_pk_inc:
+          /* This should filter out the negative
+          values set explicitly by the user. */
+          if (auto_pk_inc <= auto_pk_max_value) {
+            ut_a(m_prebuilt->autoinc_increment > 0);
+
+            ulonglong	offset;
+            ulonglong	increment;
+            dberr_t		err;
+
+            offset = m_prebuilt->autoinc_offset;
+            increment = m_prebuilt->autoinc_increment;
+
+						auto_pk_inc = innobase_next_autoinc(
+										auto_pk_inc,
+                    1, increment, offset,
+										auto_pk_max_value);
+
+            err = innobase_set_max_auto_pk_inc(
+										auto_pk_inc);
+
+            if (err != DB_SUCCESS) {
+              error = err;
+            }
+          }
+        }
+        break;
+      default:
+        break;
+    }
+  }
 
 	innobase_srv_conc_exit_innodb(m_prebuilt);
 

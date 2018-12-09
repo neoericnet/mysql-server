@@ -433,6 +433,13 @@ private:
 
 	void innobase_initialize_autoinc();
 
+	/**
+	 * auto_pk
+	 */
+  dberr_t innobase_lock_auto_pk_inc();
+
+  dberr_t innobase_set_max_auto_pk_inc(ulonglong auto_pk_inc);
+
 	void innobase_initialize_auto_pk_inc();
 
 	/** Resets a query execution 'template'.

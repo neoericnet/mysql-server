@@ -3672,7 +3672,6 @@ int handler::update_auto_increment()
   DBUG_RETURN(0);
 }
 
-
 /** @brief
   MySQL signal that it changed the column bitmap
 
@@ -3805,6 +3804,301 @@ void handler::ha_release_auto_increment()
   }
 }
 
+/**
+ * auto_pk
+ * only support innodb
+ */
+#define AUTO_PK_INC_DEFAULT_NB_ROWS 1 // Some prefer 1024 here
+#define AUTO_PK_INC_DEFAULT_NB_MAX_BITS 16
+#define AUTO_PK_INC_DEFAULT_NB_MAX ((1 << AUTO_PK_INC_DEFAULT_NB_MAX_BITS) - 1)
+
+int handler::update_auto_pk_increment()
+{
+  ulonglong nr, nb_reserved_values;
+  bool append= FALSE;
+  THD *thd= table->in_use;
+  struct system_variables *variables= &thd->variables;
+  DBUG_ASSERT(table_share->tmp_table != NO_TMP_TABLE ||
+              m_lock_type != F_UNLCK);
+  DBUG_ENTER("handler::update_auto_primary_key_increment");
+
+  /*
+    auto_pk_next_insert_id is a "cursor" into the reserved interval, it may go greater
+    than the interval, but not smaller.
+  */
+  DBUG_ASSERT(auto_pk_next_insert_id >= auto_pk_inc_interval_for_cur_row.minimum());
+
+//  if ((nr= table->auto_pk_row_field->val_int()) != 0 ||
+//      (!table->auto_pk_row_field &&
+//       thd->variables.sql_mode & MODE_NO_AUTO_VALUE_ON_ZERO))
+//  {
+//    /*
+//      Update auto_pk_next_insert_id if we had already generated a value in this
+//      statement (case of INSERT VALUES(null),(3763),(null):
+//      the last NULL needs to insert 3764, not the value of the first NULL plus
+//      1).
+//      Also we should take into account the the sign of the value.
+//      Since auto_increment value can't have negative value we should update
+//      next_insert_id only in case when we INSERTing explicit positive value.
+//      It means that for a table that has SIGNED INTEGER column when we execute
+//      the following statement
+//      INSERT INTO t1 VALUES( NULL), (-1), (NULL)
+//      we shouldn't call adjust_next_insert_id_after_explicit_value()
+//      and the result row will be (1, -1, 2) (for new opened connection
+//      to the server). On the other hand, for the statement
+//      INSERT INTO t1 VALUES( NULL), (333), (NULL)
+//      we should call adjust_next_insert_id_after_explicit_value()
+//      and result row will be (1, 333, 334).
+//    */
+//    if (((Field_num*)table->auto_pk_row_field)->unsigned_flag ||
+//        ((longlong)nr) > 0)
+//      adjust_next_insert_id_after_explicit_value(nr);
+//
+//    auto_pk_insert_id_for_cur_row= 0; // didn't generate anything
+//    DBUG_RETURN(0);
+//  }
+
+  if (auto_pk_next_insert_id > table->auto_pk_row_field->get_max_int_value())
+    DBUG_RETURN(HA_ERR_AUTO_PK_INC_READ_FAILED);
+
+  if ((nr= auto_pk_next_insert_id) >= auto_pk_inc_interval_for_cur_row.maximum())
+  {
+    /* next_insert_id is beyond what is reserved, so we reserve more. */
+    const Discrete_interval *forced=
+            thd->auto_pk_inc_intervals_forced.get_next();
+    if (forced != NULL)
+    {
+      nr= forced->minimum();
+      /*
+        In a multi insert statement when the number of affected rows is known
+        then reserve those many number of auto increment values. So that
+        interval will be starting value to starting value + number of affected
+        rows * increment of auto increment.
+       */
+      nb_reserved_values= (estimation_rows_to_insert > 0) ?
+                          estimation_rows_to_insert : forced->values();
+    }
+    else
+    {
+      /*
+        handler::estimation_rows_to_insert was set by
+        handler::ha_start_bulk_insert(); if 0 it means "unknown".
+      */
+      ulonglong nb_desired_values;
+      /*
+        If an estimation was given to the engine:
+        - use it.
+        - if we already reserved numbers, it means the estimation was
+        not accurate, then we'll reserve 2*AUTO_INC_DEFAULT_NB_ROWS the 2nd
+        time, twice that the 3rd time etc.
+        If no estimation was given, use those increasing defaults from the
+        start, starting from AUTO_INC_DEFAULT_NB_ROWS.
+        Don't go beyond a max to not reserve "way too much" (because
+        reservation means potentially losing unused values).
+        Note that in prelocked mode no estimation is given.
+      */
+
+      if ((auto_pk_inc_intervals_count == 0) && (estimation_rows_to_insert > 0))
+        nb_desired_values= estimation_rows_to_insert;
+      else if ((auto_pk_inc_intervals_count == 0) &&
+               (thd->lex->bulk_insert_row_cnt > 0))
+      {
+        /*
+          For multi-row inserts, if the bulk inserts cannot be started, the
+          handler::estimation_rows_to_insert will not be set. But we still
+          want to reserve the autoinc values.
+        */
+        nb_desired_values= thd->lex->bulk_insert_row_cnt;
+      }
+      else /* go with the increasing defaults */
+      {
+        /* avoid overflow in formula, with this if() */
+        if (auto_pk_inc_intervals_count <= AUTO_PK_INC_DEFAULT_NB_MAX_BITS)
+        {
+          nb_desired_values= AUTO_PK_INC_DEFAULT_NB_ROWS *
+                             (1 << auto_pk_inc_intervals_count);
+          set_if_smaller(nb_desired_values, AUTO_PK_INC_DEFAULT_NB_MAX);
+        }
+        else
+          nb_desired_values= AUTO_PK_INC_DEFAULT_NB_MAX;
+      }
+      /* This call ignores all its parameters but nr, currently */
+      get_auto_pk_increment(variables->auto_increment_offset,
+                         variables->auto_increment_increment,
+                         nb_desired_values, &nr,
+                         &nb_reserved_values);
+      if (nr == ULLONG_MAX)
+        DBUG_RETURN(HA_ERR_AUTO_PK_INC_READ_FAILED);  // Mark failure
+
+      /*
+        That rounding below should not be needed when all engines actually
+        respect offset and increment in get_auto_increment(). But they don't
+        so we still do it. Wonder if for the not-first-in-index we should do
+        it. Hope that this rounding didn't push us out of the interval; even
+        if it did we cannot do anything about it (calling the engine again
+        will not help as we inserted no row).
+      */
+      nr= compute_next_insert_id(nr-1, variables);
+    }
+
+    if (table->s->auto_pk_keypart == 0)
+    {
+      /* We must defer the appending until "nr" has been possibly truncated */
+      append= TRUE;
+    }
+    else
+    {
+      /*
+        For such auto_increment there is no notion of interval, just a
+        singleton. The interval is not even stored in
+        thd->auto_inc_interval_for_cur_row, so we are sure to call the engine
+        for next row.
+      */
+      DBUG_PRINT("info",("auto_pk_increment: special not-first-in-index"));
+    }
+  }
+
+  if (unlikely(nr == ULLONG_MAX))
+    DBUG_RETURN(HA_ERR_AUTO_PK_INC_ERANGE);
+
+  DBUG_PRINT("info",("auto_pk_increment: %lu", (ulong) nr));
+
+  if (unlikely(table->auto_pk_row_field->store((longlong) nr, TRUE)))
+  {
+    /*
+      first test if the query was aborted due to strict mode constraints
+    */
+    if (thd->killed == THD::KILL_BAD_DATA)
+      DBUG_RETURN(HA_ERR_AUTO_PK_INC_ERANGE);
+
+    /*
+      field refused this value (overflow) and truncated it, use the result of
+      the truncation (which is going to be inserted); however we try to
+      decrease it to honour auto_increment_* variables.
+      That will shift the left bound of the reserved interval, we don't
+      bother shifting the right bound (anyway any other value from this
+      interval will cause a duplicate key).
+    */
+    nr= prev_insert_id(table->auto_pk_row_field->val_int(), variables);
+    if (unlikely(table->auto_pk_row_field->store((longlong) nr, TRUE)))
+      nr= table->auto_pk_row_field->val_int();
+  }
+  if (append)
+  {
+    auto_pk_inc_interval_for_cur_row.replace(nr, nb_reserved_values,
+                                          variables->auto_increment_increment);
+    auto_pk_inc_intervals_count++;
+    /* Row-based replication does not need to store intervals in binlog */
+    if (mysql_bin_log.is_open() && !thd->is_current_stmt_binlog_format_row())
+      thd->auto_pk_inc_intervals_in_cur_stmt_for_binlog.append(auto_inc_interval_for_cur_row.minimum(),
+                                                            auto_inc_interval_for_cur_row.values(),
+                                                            variables->auto_increment_increment);
+  }
+
+  /*
+    Record this autogenerated value. If the caller then
+    succeeds to insert this value, it will call
+    record_first_successful_insert_id_in_cur_stmt()
+    which will set first_successful_insert_id_in_cur_stmt if it's not
+    already set.
+  */
+  auto_pk_insert_id_for_cur_row= nr;
+  /*
+    Set next insert id to point to next auto-increment value to be able to
+    handle multi-row statements.
+  */
+  set_auto_pk_next_insert_id(compute_next_insert_id(nr, variables));
+
+  DBUG_RETURN(0);
+}
+
+/**
+  Reserves an interval of auto_pk_increment values from the handler.
+
+  @param       offset              offset (modulus increment)
+  @param       increment           increment between calls
+  @param       nb_desired_values   how many values we want
+  @param[out]  first_value         the first value reserved by the handler
+  @param[out]  nb_reserved_values  how many values the handler reserved
+
+  offset and increment means that we want values to be of the form
+  offset + N * increment, where N>=0 is integer.
+  If the function sets *first_value to ULLONG_MAX it means an error.
+  If the function sets *nb_reserved_values to ULLONG_MAX it means it has
+  reserved to "positive infinite".
+*/
+
+void handler::get_auto_pk_increment(ulonglong offset, ulonglong increment,
+                                 ulonglong nb_desired_values,
+                                 ulonglong *first_value,
+                                 ulonglong *nb_reserved_values)
+{
+  ulonglong nr;
+  int error;
+  DBUG_ENTER("handler::get_auto_pk_increment");
+
+  (void) extra(HA_EXTRA_KEYREAD);
+  table->mark_columns_used_by_index_no_reset(table->s->auto_pk_index,
+                                             table->read_set);
+  column_bitmaps_signal();
+
+  if (ha_index_init(table->s->auto_pk_index, 1))
+  {
+    /* This should never happen, assert in debug, and fail in release build */
+    DBUG_ASSERT(0);
+    *first_value= ULLONG_MAX;
+    DBUG_VOID_RETURN;
+  }
+
+  if (table->s->auto_pk_keypart == 0)
+  {						// Autoincrement at key-start
+    error= ha_index_last(table->record[1]);
+    /*
+      MySQL implicitely assumes such method does locking (as MySQL decides to
+      use nr+increment without checking again with the handler, in
+      handler::update_auto_pk_increment()), so reserves to infinite.
+    */
+    *nb_reserved_values= ULLONG_MAX;
+  }
+  else
+  {
+    uchar key[MAX_KEY_LENGTH];
+    key_copy(key, table->record[0],
+             table->key_info + table->s->auto_pk_index,
+             table->s->auto_pk_key_offset);
+    error= ha_index_read_map(table->record[1], key,
+                             make_prev_keypart_map(table->s->auto_pk_keypart),
+                             HA_READ_PREFIX_LAST);
+    /*
+      MySQL needs to call us for next row: assume we are inserting ("a",null)
+      here, we return 3, and next this statement will want to insert
+      ("b",null): there is no reason why ("b",3+1) would be the good row to
+      insert: maybe it already exists, maybe 3+1 is too large...
+    */
+    *nb_reserved_values= 1;
+  }
+
+  if (error)
+  {
+    if (error == HA_ERR_END_OF_FILE || error == HA_ERR_KEY_NOT_FOUND)
+    {
+      /* No entry found, start with 1. */
+      nr= 1;
+    }
+    else
+    {
+      DBUG_ASSERT(0);
+      nr= ULLONG_MAX;
+    }
+  }
+  else
+    nr= ((ulonglong) table->auto_pk_row_field->
+            val_int_offset(table->s->rec_buff_length)+1);
+  ha_index_end();
+  (void) extra(HA_EXTRA_NO_KEYREAD);
+  *first_value= nr;
+  DBUG_VOID_RETURN;
+}
 
 /**
   Construct and emit duplicate key error message using information

@@ -1200,6 +1200,19 @@ struct trx_t {
 					when the trx instance is destroyed.
 					Protected by lock_sys->mutex. */
 	/*------------------------------*/
+	/**
+	 * auto_pk
+	 */
+	ulint		n_auto_pk_inc_rows;	/*!< no. of AUTO-PK-INC rows required for
+				an SQL statement. This is useful for
+				multi-row INSERTs */
+	ib_vector_t*    auto_pk_inc_locks;  /* AUTO_PK_INC locks held by this
+				transaction. Note that these are
+				also in the lock list trx_locks. This
+				vector needs to be freed explicitly
+				when the trx instance is destroyed.
+				Protected by lock_sys->mutex. */
+	/*------------------------------*/
 	bool		read_only;	/*!< true if transaction is flagged
 					as a READ-ONLY transaction.
 					if auto_commit && will_lock == 0

@@ -498,8 +498,8 @@ is the global server default. */
 #define HA_ERR_WRONG_FILE_NAME         199  /* Invalid Filename */
 #define HA_ERR_NOT_ALLOWED_COMMAND     200  /* Operation is not allowed */
 #define HA_ERR_COMPUTE_FAILED          201  /* Compute generated column value failed */
-#define HA_ERR_AUTOPKINC_READ_FAILED 	 202   /* Failed to get next autopkinc value */
-#define HA_ERR_AUTOPKINC_ERANGE    		 203     /* Failed to set row autopkinc value */
+#define HA_ERR_AUTO_PK_INC_READ_FAILED 202  /* Failed to get next auto_pk_inc value */
+#define HA_ERR_AUTO_PK_INC_ERANGE    	 203  /* Failed to set row auto_pk_inc value */
 #define HA_ERR_LAST                    203  /* Copy of last error nr */
 
 /* Number of different errors */
